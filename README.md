@@ -42,7 +42,7 @@ Rockstar's games are also full of exploitable glitches, which are a category of 
 
 None of these are problems Killswitch can solve. It operates at the network layer, and these cheats leave no trace in packet timing. They are worth knowing about so you can make an informed decision if it's worth playing PVP at all.
 
-### How Killswitch Helps
+## How Killswitch Helps
 
 Killswitch monitors packet flow between your router and console. When a player’s packets go silent and resume, the gap is classified and scored per IP. Crossing the threshold blocks the player in the firewall. In **analysis mode**, it detects and logs without blocking, useful for studying sessions or verifying setups. In **operational mode**, it blocks the player.
 
