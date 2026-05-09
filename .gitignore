@@ -45,5 +45,4 @@ logs/
 .env.local
 
 # Claude config
-CLAUDE.md
 .claude/
