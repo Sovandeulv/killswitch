@@ -21,11 +21,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LagSwitcherRecord:
-    """Record of a known lag switcher."""
+    """Record of a known lag switcher.
+
+    Per-gap-type counts replace the old `count` field, which was always
+    1 in practice because it only incremented on the unconfirmed→confirmed
+    transition. The breakdown lets severity be inferred: many short gaps
+    suggest MTU tweaking or bad line; few long gaps suggest deliberate
+    switching. Legacy `count` entries on disk are silently dropped on load.
+    """
     first_seen: float
     last_seen: float
     score: float
-    count: int = 1
+    short: int = 0
+    medium: int = 0
+    long: int = 0
 
 
 @dataclass
@@ -230,14 +239,19 @@ class SessionState:
     def set_host(self, ip: str) -> None:
         """Set the session host IP.
 
-        Only the host is protected from blocking. When the host changes,
-        the old host loses protection and is analyzed like any other player.
+        Only the host is protected from blocking (via is_blockable).
+        When the host changes, the old host loses protection and is
+        analyzed like any other player.
+
+        find_session_host filters confirmed and blocked IPs out of
+        candidacy, so this method is expected to receive a clean IP.
+        The discards below are defensive no-ops in the normal path —
+        kept in case set_host ever gains a non-find_session_host caller.
         """
         with self._lock:
             if self.host_ip != ip:
                 logger.debug(f"Session host set to {ip}")
                 self.host_ip = ip
-                # Unblock host if it was blocked (e.g., from history)
                 self.confirmed_switchers.discard(ip)
                 self.blocked_ips.discard(ip)
                 self.scores.pop(ip, None)
@@ -336,7 +350,9 @@ class HistoryManager:
                         first_seen=details.get("first_seen", time.time()),
                         last_seen=details.get("last_seen", time.time()),
                         score=details.get("score", 0),
-                        count=details.get("count", 1)
+                        short=details.get("short", 0),
+                        medium=details.get("medium", 0),
+                        long=details.get("long", 0),
                     )
 
                 if self.known_lag_switchers:
@@ -356,7 +372,9 @@ class HistoryManager:
                     "first_seen": record.first_seen,
                     "last_seen": record.last_seen,
                     "score": record.score,
-                    "count": record.count
+                    "short": record.short,
+                    "medium": record.medium,
+                    "long": record.long,
                 }
                 for ip, record in self.known_lag_switchers.items()
             }
@@ -376,34 +394,41 @@ class HistoryManager:
         with self._lock:
             self._save_locked()
 
-    def add(self, ip: str, score: float) -> None:
-        """Add or update a lag switcher in history."""
+    def record_gap(self, ip: str, score: float, gap_type: str) -> None:
+        """Record a scored gap for a confirmed switcher.
+
+        Creates the record on first call, updates it on subsequent calls.
+        Increments the gap_type counter and updates score (tracks max).
+
+        Disk write happens only on first record (so newly-confirmed bad
+        actors are persisted immediately). Subsequent updates stay in
+        memory and are flushed at session end via save().
+        """
         with self._lock:
             now = time.time()
+            is_new = ip not in self.known_lag_switchers
 
-            if ip in self.known_lag_switchers:
-                record = self.known_lag_switchers[ip]
-                record.last_seen = now
-                record.score = max(record.score, score)
-                record.count += 1
-            else:
+            if is_new:
                 self.known_lag_switchers[ip] = LagSwitcherRecord(
                     first_seen=now,
                     last_seen=now,
                     score=score,
-                    count=1
                 )
 
-            # Save immediately to prevent data loss
-            self._save_locked()
+            record = self.known_lag_switchers[ip]
+            record.last_seen = now
+            if score > record.score:
+                record.score = score
 
-    def update_score(self, ip: str, score: float) -> None:
-        """Update score for a known lag switcher in-memory (no disk save)."""
-        with self._lock:
-            if ip in self.known_lag_switchers:
-                record = self.known_lag_switchers[ip]
-                if score > record.score:
-                    record.score = score
+            if gap_type == "short":
+                record.short += 1
+            elif gap_type == "medium":
+                record.medium += 1
+            elif gap_type == "long":
+                record.long += 1
+
+            if is_new:
+                self._save_locked()
 
     def remove(self, ip: str) -> None:
         """Remove an IP from history (e.g., if it becomes session host)."""

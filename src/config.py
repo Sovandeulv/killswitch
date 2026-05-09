@@ -20,7 +20,8 @@ class Config:
     # Gaps above this are likely disconnections, not lag switching
     max_gap_threshold: float = 5.0
 
-    # Gap classification boundary
+    # Gap classification boundaries
+    short_gap_end: float = 0.8      # End of short / start of medium
     medium_gap_end: float = 2.0     # End of medium / start of long
 
     # === Scoring ===

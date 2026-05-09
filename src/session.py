@@ -49,11 +49,20 @@ class SessionManager:
         returned — this prevents transient traffic spikes (e.g. a
         shootout) from flipping the host away from the true leader.
 
+        Confirmed switchers and currently-blocked IPs are excluded from
+        candidacy. This is what makes "block the cheater even if they're
+        the actual session host" work: the busiest *clean* peer becomes
+        our designated host (and gets is_blockable protection), while
+        the real session host stays PF-blocked. The P2P mesh routes
+        gameplay state via the clean peers, so the session keeps running.
+        Previously-accumulated candidates that have since become blocked
+        or confirmed are pruned each call.
+
         Thread safety: Takes a consistent snapshot of state under the
         lock, then processes without holding the lock.
 
         Returns:
-            IP of cumulative leader, or None if no candidates yet
+            IP of cumulative leader among clean peers, or None
         """
         min_packets = (config.min_active_packets_warmup
                        if self.state.warmup_active
@@ -63,17 +72,20 @@ class SessionManager:
         with self.state.locked():
             packet_counts = dict(self.state.packet_counts)
             confirmed = set(self.state.confirmed_switchers)
+            blocked = set(self.state.blocked_ips)
             scores = dict(self.state.scores)
             gap_counts = {
                 ip: dict(counts)
                 for ip, counts in self.state.gap_counts.items()
             }
 
+        excluded = confirmed | blocked
+
         # Score this round's candidates and accumulate (no lock needed)
         for ip, count in packet_counts.items():
             if count < min_packets:
                 continue
-            if ip in confirmed:
+            if ip in excluded:
                 continue
 
             score = self._calculate_host_score(
@@ -83,6 +95,13 @@ class SessionManager:
                 self.host_candidates[ip] = (
                     self.host_candidates.get(ip, 0) + score
                 )
+
+        # Drop accumulated candidates that have since been confirmed
+        # or blocked — they earned candidacy as clean peers, but turned
+        # hostile after, so they're no longer eligible to be host.
+        for ip in list(self.host_candidates):
+            if ip in excluded:
+                del self.host_candidates[ip]
 
         if not self.host_candidates:
             return None

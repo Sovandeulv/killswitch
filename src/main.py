@@ -155,8 +155,11 @@ class Killswitch:
         for ip, score in bad_actors.items():
             self.state.confirmed_switchers.add(ip)
             self.state.scores[ip] = score
-            if self.operational and self.state.is_blockable(ip):
-                self.firewall.block(ip)
+        if self.operational and bad_actors:
+            blockable = [
+                ip for ip in bad_actors if self.state.is_blockable(ip)
+            ]
+            self.firewall.block_many(blockable)
         if bad_actors:
             logger.info(
                 f"Loaded {len(bad_actors)} known bad actors from history"
@@ -242,10 +245,16 @@ class Killswitch:
 
     def resume(self) -> None:
         """Resume packet processing."""
-        self.state.paused = False
+        # Clear stale per-IP last-packet timestamps BEFORE unpausing, so
+        # the sniffer thread can't be writing to last_packet while we're
+        # clearing it. Otherwise the first packet after resume would
+        # produce gap = pause_duration and falsely confirm.
+        self.analyzer.clear_packet_history()
 
         # Brief warmup after resume for host detection
         self.state.start_warmup(config.resume_warmup_period)
+
+        self.state.paused = False
 
         logger.info(
             f"▶️ RESUMED ({config.resume_warmup_period:.0f}s warmup)"
@@ -275,6 +284,9 @@ class Killswitch:
 
         elif command == 'l':
             log_status(self.state, self.history.count())
+
+        elif command in ('h', '?', 'help'):
+            log_commands()
 
         elif command == 'q':
             self.stop_event.set()

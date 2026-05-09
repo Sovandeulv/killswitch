@@ -108,7 +108,7 @@ def log_commands() -> None:
     """Log available commands."""
     logger.info(
         "Commands: p=pause/resume, l=list, "
-        "c IP=clear score, u SCORE=unblock, q=quit"
+        "c IP=clear score, u SCORE=unblock, h=help, q=quit"
     )
 
 

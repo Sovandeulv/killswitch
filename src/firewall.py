@@ -53,6 +53,26 @@ class Firewall(abc.ABC):
         """
         pass
 
+    def block_many(self, ips) -> int:
+        """
+        Block many IPs with a single rule reload.
+
+        Default implementation falls back to per-IP block(). Platforms
+        whose block() rewrites the full ruleset (macOS PF) override this
+        to avoid O(N) subprocess calls.
+
+        Args:
+            ips: Iterable of IPs to block
+
+        Returns:
+            Number of IPs newly blocked
+        """
+        count = 0
+        for ip in ips:
+            if self.block(ip):
+                count += 1
+        return count
+
     @abc.abstractmethod
     def unblock(self, ip: str) -> bool:
         """
@@ -109,7 +129,11 @@ class MacOSFirewall(Firewall):
                 )
                 logger.debug("PF firewall enabled")
 
-            # Clear any existing rules in our anchor
+            # Clear any existing rules in our anchor.
+            # Mandatory: a previous run (especially -l load mode, which
+            # exits leaving rules in place) may have left stale rules.
+            # state.blocked_ips starts empty, so the rules and state
+            # must agree on "nothing blocked yet" before we reload.
             self._clear_anchor_rules()
 
             self.initialized = True
@@ -146,6 +170,38 @@ class MacOSFirewall(Firewall):
             logger.error(f"Error blocking {ip}: {e}")
             self.state.mark_unblocked(ip)
             return False
+
+    def block_many(self, ips) -> int:
+        """Block many IPs with one rule reload.
+
+        Updates state for all IPs first, then calls _update_rules() once.
+        Avoids the O(N) pfctl invocations of calling block() in a loop —
+        important when loading large history sets at startup or via -l mode.
+        """
+        already_blocked = self.state.get_blocked_snapshot()
+        to_add = []
+        for ip in ips:
+            if not self.state.is_blockable(ip):
+                logger.warning(f"Cannot block {ip} - protected IP")
+                continue
+            if ip in already_blocked or ip in to_add:
+                continue
+            to_add.append(ip)
+
+        if not to_add:
+            return 0
+
+        for ip in to_add:
+            self.state.mark_blocked(ip)
+
+        if not self._update_rules():
+            for ip in to_add:
+                self.state.mark_unblocked(ip)
+            return 0
+
+        for ip in to_add:
+            logger.warning(f"🛡️ BLOCKED: {ip}")
+        return len(to_add)
 
     def unblock(self, ip: str) -> bool:
         """Unblock an IP."""

@@ -86,6 +86,19 @@ class GapAnalyzer:
         self._stats_active_ips.clear()
         self._stats_gaps_suppressed = 0
 
+    def clear_packet_history(self) -> None:
+        """Clear per-IP last-packet tracking and the recent-gaps window.
+
+        Called on resume. Without this, the first packet from each peer
+        after a pause produces gap = pause_duration, which classifies as
+        a Long gap (+10) and can falsely confirm. Clearing means the
+        first post-resume packet establishes a fresh baseline (the
+        `if ip in self.last_packet` guard is False, no gap measured)
+        and gap scoring resumes correctly from packet #2 onward.
+        """
+        self.last_packet.clear()
+        self._recent_gaps.clear()
+
     def process_packet(self, packet_info: Dict) -> None:
         """
         Process a packet and check for lag switching patterns.
@@ -211,8 +224,7 @@ class GapAnalyzer:
         )
 
         if newly_confirmed:
-            # Log and persist — history.add() uses its own lock
-            self.history.add(ip, new_score)
+            self.history.record_gap(ip, new_score, gap_type)
             with self.state.locked():
                 gap_counts = self.state.get_gap_counts(ip)
                 short = gap_counts["short"]
@@ -223,8 +235,8 @@ class GapAnalyzer:
                 f"gaps: {short}S/{medium}M/{long}L)"
             )
         elif new_score >= config.score_threshold:
-            # Already confirmed — keep history score up to date
-            self.history.update_score(ip, new_score)
+            # Already confirmed — keep history record current
+            self.history.record_gap(ip, new_score, gap_type)
 
     def log_stats(self) -> None:
         """
@@ -293,12 +305,9 @@ class GapAnalyzer:
         Returns:
             Tuple of (gap_type, score)
         """
-        if gap < 0.8:
-            # Short: 0.5-0.8s
+        if gap < config.short_gap_end:
             return ("short", config.score_short)
         elif gap <= config.medium_gap_end:
-            # Medium: 0.8-2.0s
             return ("medium", config.score_medium)
         else:
-            # Long: > 2.0s
             return ("long", config.score_long)
