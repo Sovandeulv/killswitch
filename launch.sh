@@ -1,5 +1,51 @@
 #!/bin/bash
-# Killswitch v2.0 Launcher
+# Killswitch Launcher
+
+# Change to script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
+
+# Check Python (needed for version lookup and the app itself)
+if ! command -v python3 &> /dev/null; then
+    echo "Error: Python 3 is required but not found."
+    exit 1
+fi
+
+# Read canonical version from src/__init__.py
+VERSION=$(python3 -c "from src import __version__; print(__version__)" 2>/dev/null)
+VERSION=${VERSION:-unknown}
+
+# Parse arguments (before sudo check, so -h and -v work without sudo)
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            cat <<EOF
+Killswitch v$VERSION - Lag Switch Detector for RDO/GTAO
+
+Usage: sudo ./launch.sh [OPTIONS]
+
+Options:
+  -h, --help     Show this help and exit
+  -v, --version  Show version and exit
+
+Run without options to start interactively. The launcher will prompt
+for mode (operational/analysis), network interface, and score threshold.
+
+See README.md for setup and usage.
+EOF
+            exit 0
+            ;;
+        -v|--version)
+            echo "Killswitch v$VERSION"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Try './launch.sh --help' for usage."
+            exit 1
+            ;;
+    esac
+done
 
 # Check for sudo
 if [ "$EUID" -ne 0 ]; then
@@ -8,21 +54,11 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Change to script directory
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
-
 # Header
 echo "========================================================"
-echo "  KILLSWITCH v2.0 - Lag Switch Detector for RDO/GTAO"
+echo "  KILLSWITCH v$VERSION - Lag Switch Detector for RDO/GTAO"
 echo "========================================================"
 echo ""
-
-# Check Python
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is required but not found."
-    exit 1
-fi
 
 # Check scapy
 if ! python3 -c "import scapy" 2>/dev/null; then
@@ -70,7 +106,7 @@ fi
 echo ""
 echo "========================================================"
 echo "Starting Killswitch..."
-echo "Commands: p=pause/resume, l=list, c IP=clear score, u SCORE=unblock, q=quit"
+echo "Commands: p=pause/resume, l=list, c IP=clear score, u SCORE=unblock, h=help, q=quit"
 echo "========================================================"
 echo ""
 
